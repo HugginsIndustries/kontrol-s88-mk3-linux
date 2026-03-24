@@ -144,34 +144,29 @@ usb.transfer_type == 0x03 && usb.dst == "3.4.4" && frame.len == 110
 
 ### Step 4: Decode the Packets
 
-Use this Python snippet to decode captured packets:
+Use the included HTML decoder tool at `tools/s88-decoder.html`. Open it directly in Firefox — no server required.
 
-```python
-import msgpack
-import struct
+1. In Wireshark, right-click a packet's **Leftover Capture Data** → **Copy → As Hex Dump**
+2. Paste into the **Decode** tab of the tool
+3. The tool will automatically identify the message type (HANDSHAKE, STATE, LIGHTS, etc.) and decode all MessagePack values with named keys
 
-def decode_messages(raw: bytes):
-    offset = 0
-    while offset < len(raw):
-        if offset + 8 > len(raw):
-            break
-        length = struct.unpack_from('<I', raw, offset)[0]
-        header = raw[offset+4:offset+8]
-        payload = raw[offset+8:offset+4+length]
-        decoded = []
-        unpacker = msgpack.Unpacker(raw=False, strict_map_key=False)
-        unpacker.feed(payload)
-        for item in unpacker:
-            decoded.append(item)
-        print(f"Offset {offset:04x}: header={header.hex()} len={length}")
-        for item in decoded:
-            print(f"  {item}")
-        offset += 4 + length
+The **Diff** tab is especially useful — paste two captures of the same action at different values (e.g. 120 BPM vs 140 BPM) and it will highlight exactly which keys changed.
 
-# Paste your hex dump here
-raw = bytes.fromhex("YOUR_HEX_HERE")
-decode_messages(raw)
-```
+The tool handles all Wireshark hex dump formats automatically, including the offset+bytes+ASCII format that Wireshark outputs by default.
+
+#### Known message types and key names
+
+| Header     | Name      | Purpose                                      |
+|------------|-----------|----------------------------------------------|
+| `93024092` | HANDSHAKE | Identify software, activates PLUG-IN mode    |
+| `93025092` | INIT      | Initialize state after handshake             |
+| `93025792` | STATE     | Set keyboard parameters (tempo, etc.)        |
+| `93025892` | LIGHTS    | Light guide + arp/scale config               |
+| `93024f92` | TRANSPORT | Transport state (play/stop)                  |
+| `93025992` | SYNC      | Unknown sync message                         |
+| `93025492` | DISPLAY   | Display/screen content                       |
+
+Key names are defined in `tools/s88-decoder.html` and `src/kontrol_s88/protocol.py` — keep both in sync when new keys are discovered.
 
 ### Step 5: Find the Changing Bytes
 
