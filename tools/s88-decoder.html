@@ -81,6 +81,7 @@ button.clear-btn:hover { background: #1e1e1e; color: #ccc; }
   <div class="tabs">
     <button class="tab active" onclick="switchTab('decode')">Decode</button>
     <button class="tab" onclick="switchTab('diff')">Diff</button>
+    <button class="tab" onclick="switchTab('usb')">USB Descriptors</button>
   </div>
 
   <div id="panel-decode" class="panel active">
@@ -97,8 +98,7 @@ button.clear-btn:hover { background: #1e1e1e; color: #ccc; }
     <div id="output-decode" class="output"></div>
   </div>
 
-  <div id="panel-diff" class="panel">
-    <div class="input-row">
+  <div id="panel-diff" class="panel">    <div class="input-row">
       <div>
         <label>Capture A</label>
         <textarea id="hex-a" placeholder="Paste first hex dump..."></textarea>
@@ -113,6 +113,20 @@ button.clear-btn:hover { background: #1e1e1e; color: #ccc; }
       <button class="clear-btn" onclick="['hex-a','hex-b','output-diff'].forEach(id=>{const el=document.getElementById(id);if(el.tagName==='TEXTAREA')el.value='';else el.innerHTML=''})">Clear</button>
     </div>
     <div id="output-diff" class="output"></div>
+  </div>
+
+  <div id="panel-usb" class="panel">
+    <div class="input-row single">
+      <div>
+        <label>USB descriptor hex dump — paste from Wireshark or lsusb -v</label>
+        <textarea id="hex-usb" placeholder="0000   40 d7 ae 7a d3 8d ff ff 43 02 80 04 03 00 2d 00&#10;0010   2a 08 c3 69 00 00 00 00 f6 53 05 00 00 00 00 00&#10;..."></textarea>
+      </div>
+    </div>
+    <div class="btn-row">
+      <button class="decode-btn" onclick="decodeUsb()">Decode</button>
+      <button class="clear-btn" onclick="document.getElementById('hex-usb').value='';document.getElementById('output-usb').innerHTML=''">Clear</button>
+    </div>
+    <div id="output-usb" class="output"></div>
   </div>
 </div>
 
@@ -154,7 +168,7 @@ const KEY_NAMES = {
 };
 
 function switchTab(name) {
-  document.querySelectorAll('.tab').forEach((t,i)=>t.classList.toggle('active',['decode','diff'][i]===name));
+  document.querySelectorAll('.tab').forEach((t,i)=>t.classList.toggle('active',['decode','diff','usb'][i]===name));
   document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
   document.getElementById('panel-'+name).classList.add('active');
 }
@@ -185,6 +199,17 @@ function hexToBytes(raw) {
 
 function readU32LE(b,o){ return (b[o]|b[o+1]<<8|b[o+2]<<16|b[o+3]<<24)>>>0; }
 function looksLikeS88(b){ return b.length>=8 && b[4]===0x93 && b[5]===0x02 && readU32LE(b,0)>=4 && readU32LE(b,0)<=b.length-4; }
+
+function findS88Offset(b) {
+  // Scan for 0x93 0x02 pattern which starts all S88 message type headers
+  for (let i = 0; i <= b.length - 8; i++) {
+    if (b[i+4] === 0x93 && b[i+5] === 0x02) {
+      const len = readU32LE(b, i);
+      if (len >= 4 && i + 4 + len <= b.length) return i;
+    }
+  }
+  return -1;
+}
 
 function mpDecode(buf, pos) {
   if (pos >= buf.length) throw new Error('EOF');
@@ -322,9 +347,23 @@ function decode(){
   if(!raw){out.innerHTML='';return;}
   try{
     const bytes=hexToBytes(raw);
-    if(!looksLikeS88(bytes)){out.innerHTML=renderRaw(bytes);return;}
-    const msgs=decodeMessages(bytes);
-    out.innerHTML=msgs.length?msgs.map(m=>renderMsg(m,null)).join(''):renderRaw(bytes);
+    if(looksLikeS88(bytes)){
+      const msgs=decodeMessages(bytes);
+      out.innerHTML=msgs.length?msgs.map(m=>renderMsg(m,null)).join(''):renderRaw(bytes);
+      return;
+    }
+    // Try scanning for S88 header within USB framing
+    const s88off = findS88Offset(bytes);
+    if(s88off > 0){
+      const payload = bytes.slice(s88off);
+      const msgs = decodeMessages(payload);
+      if(msgs.length){
+        const note = `<p style="font-size:11px;color:#888;margin-bottom:8px">S88 payload found at offset 0x${s88off.toString(16)} (skipped ${s88off} bytes of USB framing)</p>`;
+        out.innerHTML = note + msgs.map(m=>renderMsg(m,null)).join('');
+        return;
+      }
+    }
+    out.innerHTML=renderRaw(bytes);
   }catch(e){out.innerHTML=`<div class="error">${e.message}</div>`;}
 }
 
@@ -377,11 +416,222 @@ function diff(){
   }catch(e){out.innerHTML=`<div class="error">${e.message}</div>`;}
 }
 
+// ── USB Descriptor Parser ──────────────────────────────────────────────────
+
+const USB_DESC_TYPES = {
+  0x01:'Device', 0x02:'Configuration', 0x03:'String', 0x04:'Interface',
+  0x05:'Endpoint', 0x06:'Device Qualifier', 0x07:'Other Speed Config',
+  0x08:'Interface Power', 0x0b:'Interface Association', 0x21:'HID',
+  0x22:'HID Report', 0x24:'CS Interface (Audio)', 0x25:'CS Endpoint (Audio)',
+};
+
+const USB_CLASS = {
+  0x00:'Use Interface', 0x01:'Audio', 0x02:'CDC', 0x03:'HID',
+  0x05:'Physical', 0x06:'Image', 0x07:'Printer', 0x08:'Mass Storage',
+  0x09:'Hub', 0x0a:'CDC-Data', 0x0b:'Smart Card', 0x0d:'Content Security',
+  0x0e:'Video', 0x0f:'Personal Healthcare', 0xdc:'Diagnostic', 0xe0:'Wireless',
+  0xef:'Miscellaneous', 0xfe:'App Specific', 0xff:'Vendor Specific',
+};
+
+const USB_TRANSFER = { 0:'Control', 1:'Isochronous', 2:'Bulk', 3:'Interrupt' };
+const USB_SYNC     = { 0:'None', 1:'Async', 2:'Adaptive', 3:'Synchronous' };
+const USB_USAGE    = { 0:'Data', 1:'Feedback', 2:'Implicit Feedback', 3:'Reserved' };
+
+const AUDIO_SUBTYPE = {
+  0x01:'Header', 0x02:'Input Terminal', 0x03:'Output Terminal',
+  0x04:'Mixer Unit', 0x05:'Selector Unit', 0x06:'Feature Unit',
+  0x07:'Processing Unit', 0x08:'Extension Unit',
+};
+
+function parseUsbDescriptors(bytes) {
+  const descriptors = [];
+  let pos = 0;
+  while (pos < bytes.length) {
+    if (pos + 2 > bytes.length) break;
+    const len  = bytes[pos];
+    const type = bytes[pos + 1];
+    if (len < 2 || pos + len > bytes.length) break;
+    const data = bytes.slice(pos, pos + len);
+    descriptors.push(parseOneDescriptor(data, type, len, pos));
+    pos += len;
+  }
+  return descriptors;
+}
+
+function parseOneDescriptor(d, type, len, offset) {
+  const typeName = USB_DESC_TYPES[type] || `Unknown (0x${type.toString(16)})`;
+  let fields = [];
+  let badge = 'badge-unknown';
+
+  switch (type) {
+    case 0x01: // Device
+      badge = 'badge-handshake';
+      fields = [
+        ['bcdUSB',        usbBcd(d[3], d[2])],
+        ['bDeviceClass',  `0x${d[4].toString(16).padStart(2,'0')} — ${USB_CLASS[d[4]]||'Unknown'}`],
+        ['bDeviceSubClass', hex(d[5])],
+        ['bDeviceProtocol', hex(d[6])],
+        ['bMaxPacketSize0', d[7]],
+        ['idVendor',      `0x${(d[9]<<8|d[8]).toString(16).padStart(4,'0')}`],
+        ['idProduct',     `0x${(d[11]<<8|d[10]).toString(16).padStart(4,'0')}`],
+        ['bcdDevice',     usbBcd(d[13], d[12])],
+        ['iManufacturer', d[14]],
+        ['iProduct',      d[15]],
+        ['iSerialNumber', d[16]],
+        ['bNumConfigurations', d[17]],
+      ];
+      break;
+
+    case 0x02: // Configuration
+      badge = 'badge-init';
+      fields = [
+        ['wTotalLength',   d[3]<<8|d[2]],
+        ['bNumInterfaces', d[4]],
+        ['bConfigurationValue', d[5]],
+        ['iConfiguration', d[6]],
+        ['bmAttributes',   `0x${d[7].toString(16)} — ${d[7]&0x40?'Self-powered':'Bus-powered'}${d[7]&0x20?', Remote Wakeup':''}`],
+        ['bMaxPower',      `${d[8]*2} mA`],
+      ];
+      break;
+
+    case 0x04: // Interface
+      badge = 'badge-state';
+      fields = [
+        ['bInterfaceNumber',   d[2]],
+        ['bAlternateSetting',  d[3]],
+        ['bNumEndpoints',      d[4]],
+        ['bInterfaceClass',    `0x${d[5].toString(16).padStart(2,'0')} — ${USB_CLASS[d[5]]||'Unknown'}`],
+        ['bInterfaceSubClass', hex(d[6])],
+        ['bInterfaceProtocol', hex(d[7])],
+        ['iInterface',         d[8]],
+      ];
+      break;
+
+    case 0x05: // Endpoint
+      badge = 'badge-lights';
+      const epAddr = d[2];
+      const epDir  = epAddr & 0x80 ? 'IN' : 'OUT';
+      const epNum  = epAddr & 0x0f;
+      const attr   = d[3];
+      const xfer   = USB_TRANSFER[attr & 0x03] || 'Unknown';
+      const sync   = USB_SYNC[(attr>>2) & 0x03] || 'Unknown';
+      const usage  = USB_USAGE[(attr>>4) & 0x03] || 'Unknown';
+      const mps    = (d[5]<<8|d[4]) & 0x7ff;
+      fields = [
+        ['bEndpointAddress', `0x${epAddr.toString(16).padStart(2,'0')} — EP ${epNum} ${epDir}`],
+        ['bmAttributes',     `${xfer}${xfer==='Isochronous'?`, ${sync}, ${usage}`:''}`],
+        ['wMaxPacketSize',   `${mps} bytes`],
+        ['bInterval',        d[6]],
+      ];
+      break;
+
+    case 0x21: // HID
+      badge = 'badge-transport';
+      fields = [
+        ['bcdHID',         usbBcd(d[3], d[2])],
+        ['bCountryCode',   d[4]],
+        ['bNumDescriptors', d[5]],
+        ['bDescriptorType', hex(d[6])],
+        ['wDescriptorLength', d[8]<<8|d[7]],
+      ];
+      break;
+
+    case 0x0b: // Interface Association
+      badge = 'badge-init';
+      fields = [
+        ['bFirstInterface',    d[2]],
+        ['bInterfaceCount',    d[3]],
+        ['bFunctionClass',     `0x${d[4].toString(16)} — ${USB_CLASS[d[4]]||'Unknown'}`],
+        ['bFunctionSubClass',  hex(d[5])],
+        ['bFunctionProtocol',  hex(d[6])],
+        ['iFunction',          d[7]],
+      ];
+      break;
+
+    case 0x24: // CS Interface (Audio)
+      badge = 'badge-unknown';
+      const audioSub = d[2];
+      const audioSubName = AUDIO_SUBTYPE[audioSub] || `0x${audioSub.toString(16)}`;
+      fields = [['bDescriptorSubtype', audioSubName]];
+      if (audioSub === 0x01 && len >= 9) { // Header
+        fields.push(['bcdADC', usbBcd(d[4], d[3])]);
+        fields.push(['wTotalLength', d[6]<<8|d[5]]);
+        fields.push(['bInCollection', d[7]]);
+        for (let i=0; i<d[7] && 8+i<len; i++) fields.push([`baInterfaceNr[${i}]`, d[8+i]]);
+      } else if (audioSub === 0x02 && len >= 12) { // Input Terminal
+        fields.push(['bTerminalID', d[3]]);
+        fields.push(['wTerminalType', `0x${(d[5]<<8|d[4]).toString(16)}`]);
+        fields.push(['bAssocTerminal', d[6]]);
+        fields.push(['bNrChannels', d[7]]);
+        fields.push(['wChannelConfig', `0x${(d[9]<<8|d[8]).toString(16)}`]);
+      } else if (audioSub === 0x03 && len >= 9) { // Output Terminal
+        fields.push(['bTerminalID', d[3]]);
+        fields.push(['wTerminalType', `0x${(d[5]<<8|d[4]).toString(16)}`]);
+        fields.push(['bAssocTerminal', d[6]]);
+        fields.push(['bSourceID', d[7]]);
+      }
+      break;
+
+    case 0x25: // CS Endpoint (Audio)
+      badge = 'badge-unknown';
+      fields = [
+        ['bDescriptorSubtype', hex(d[2])],
+        ['bmAttributes', hex(d[3])],
+        ['bLockDelayUnits', d[4]],
+        ['wLockDelay', d[6]<<8|d[5]],
+      ];
+      break;
+
+    default:
+      fields = [['raw', Array.from(d.slice(2)).map(b=>b.toString(16).padStart(2,'0')).join(' ')]];
+  }
+
+  return { offset, len, type, typeName, badge, fields };
+}
+
+function hex(b) { return `0x${b.toString(16).padStart(2,'0')}`; }
+function usbBcd(hi, lo) { return `${((hi>>4)&0xf).toString(16)}.${(hi&0xf).toString(16)}${((lo>>4)&0xf).toString(16)}`; }
+
+function renderUsbDescriptor(desc, idx) {
+  const id = `usb${idx}`;
+  let body = desc.fields.map(([k,v]) =>
+    `<div class="kv-row"><span class="kv-key">${k}</span><span class="kv-val">${v}</span></div>`
+  ).join('');
+  return `<div class="msg-block" id="${id}">
+    <div class="msg-header" onclick="tog('${id}')">
+      <span class="badge ${desc.badge}">${desc.typeName}</span>
+      <span class="hex-meta">offset 0x${desc.offset.toString(16).padStart(4,'0')}</span>
+      <span class="hex-meta">${desc.len} bytes</span>
+      <span class="toggle-arrow">▾</span>
+    </div>
+    <div class="msg-body">${body}</div>
+  </div>`;
+}
+
+function decodeUsb() {
+  const raw = document.getElementById('hex-usb').value.trim();
+  const out = document.getElementById('output-usb');
+  if (!raw) { out.innerHTML = ''; return; }
+  try {
+    const bytes = hexToBytes(raw);
+    const descs = parseUsbDescriptors(bytes);
+    if (!descs.length) {
+      out.innerHTML = `<div class="error">No valid USB descriptors found — check that the dump starts at a descriptor boundary (first byte = descriptor length, second byte = descriptor type)</div>`;
+      return;
+    }
+    out.innerHTML = descs.map((d,i) => renderUsbDescriptor(d,i)).join('');
+  } catch(e) {
+    out.innerHTML = `<div class="error">${e.message}</div>`;
+  }
+}
+
+
 document.addEventListener('keydown', e => {
   if ((e.ctrlKey||e.metaKey) && e.key==='Enter') {
     const activePanel = document.querySelector('.panel.active');
     if (activePanel.id==='panel-decode') decode();
-    else diff();
+    else if (activePanel.id==='panel-diff') diff();
+    else decodeUsb();
   }
 });
 </script>
