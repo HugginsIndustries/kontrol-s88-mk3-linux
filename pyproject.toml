@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "kontrol-s88-mk3-linux"
+version = "0.1.0"
+description = "Unofficial Linux driver for the Native Instruments Kontrol S88 MK3"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [
+    { name = "Christian Huggins", email = "christian@hugginsindustries.com" }
+]
+requires-python = ">=3.10"
+dependencies = [
+    "libusb1",
+    "msgpack",
+    "python-rtmidi",
+]
+
+[project.scripts]
+s88-sync = "kontrol_s88:main"
+
+[project.urls]
+Homepage = "https://github.com/HugginsIndustries/kontrol-s88-mk3-linux"
+Issues = "https://github.com/HugginsIndustries/kontrol-s88-mk3-linux/issues"
