@@ -35,6 +35,7 @@ KEY_PARAM_124    = 124   # unknown bool
 KEY_PARAM_125    = 125   # unknown bool
 KEY_PARAM_126    = 126   # unknown
 
+ROOT_NOTES = ['C', 'C#', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B'] # key 0xaa = root note index 0-11
 
 def _pack_float32(value: float) -> bytes:
     """Pack a float as MessagePack float32 (ca prefix)."""
