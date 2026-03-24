@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>S88 MK3 Protocol Decoder</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: system-ui, sans-serif; background: #1a1a1a; color: #e0e0e0; min-height: 100vh; }
+header { padding: 1rem 1.5rem; border-bottom: 1px solid #333; display: flex; align-items: center; gap: 12px; }
+header h1 { font-size: 16px; font-weight: 500; color: #fff; }
+header span { font-size: 12px; color: #666; }
+.main { padding: 1.5rem;  }
+.tabs { display: flex; gap: 8px; margin-bottom: 1.5rem; }
+.tab { padding: 6px 16px; border: 1px solid #444; border-radius: 6px; background: transparent; color: #aaa; cursor: pointer; font-size: 13px; }
+.tab:hover { background: #2a2a2a; }
+.tab.active { background: #2a2a2a; color: #fff; border-color: #666; }
+.panel { display: none; }
+.panel.active { display: block; }
+.input-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
+.input-row.single { grid-template-columns: 1fr; }
+label { font-size: 12px; color: #888; display: block; margin-bottom: 4px; }
+textarea { width: 100%; height: 140px; font-family: 'Courier New', monospace; font-size: 12px; resize: vertical; border: 1px solid #333; border-radius: 6px; padding: 10px; background: #111; color: #e0e0e0; line-height: 1.5; }
+textarea:focus { outline: none; border-color: #555; }
+.btn-row { display: flex; gap: 8px; align-items: center; margin-bottom: 1rem; }
+button.decode-btn { padding: 7px 20px; border: 1px solid #444; border-radius: 6px; background: #2a2a2a; color: #fff; cursor: pointer; font-size: 13px; }
+button.decode-btn:hover { background: #333; }
+button.clear-btn { padding: 7px 14px; border: 1px solid #333; border-radius: 6px; background: transparent; color: #888; cursor: pointer; font-size: 13px; }
+button.clear-btn:hover { background: #1e1e1e; color: #ccc; }
+.output { margin-top: 0.5rem; }
+.msg-block { border: 1px solid #2a2a2a; border-radius: 8px; margin-bottom: 8px; overflow: hidden; }
+.msg-header { padding: 8px 14px; background: #222; display: flex; gap: 12px; align-items: center; font-size: 12px; flex-wrap: wrap; cursor: pointer; user-select: none; }
+.msg-header:hover { background: #282828; }
+.badge { padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; letter-spacing: 0.02em; }
+.badge-handshake { background: #2d1f6e; color: #a89cf7; }
+.badge-init { background: #0f3d28; color: #5fd4a0; }
+.badge-state { background: #0f2d4a; color: #5aaee8; }
+.badge-lights { background: #3d2a0a; color: #e8b45a; }
+.badge-transport { background: #1a3a1a; color: #7bc97b; }
+.badge-unknown { background: #2a2a2a; color: #888; }
+.badge-raw { background: #2a2a2a; color: #888; }
+.msg-body { padding: 12px 14px; font-family: 'Courier New', monospace; font-size: 12px; line-height: 1.8; background: #141414; }
+.kv-row { display: flex; gap: 0; margin-bottom: 1px; align-items: baseline; }
+.kv-key { color: #888; width: 180px; min-width: 180px; flex-shrink: 0; font-size: 11px; padding-right: 12px; }
+.kv-val { color: #e0e0e0; word-break: break-all; flex: 1; }
+.kv-val.bpm { color: #5aaee8; font-weight: 600; font-size: 14px; }
+.kv-val.str { color: #7bc97b; }
+.kv-val.num { color: #e8b45a; }
+.kv-val.bool { color: #a89cf7; }
+.kv-val.nil { color: #555; }
+.kv-val.changed { background: #3d2a0a; color: #e8b45a; padding: 1px 6px; border-radius: 3px; }
+.kv-val.added { background: #0f3d28; color: #7bc97b; padding: 1px 6px; border-radius: 3px; }
+.kv-val.removed { background: #3d0f0f; color: #e87b7b; padding: 1px 6px; border-radius: 3px; text-decoration: line-through; }
+.nested { padding-left: 16px; border-left: 2px solid #2a2a2a; margin: 4px 0 6px; }
+.nested-header { font-size: 11px; color: #666; margin-bottom: 4px; }
+.error { color: #e87b7b; font-size: 13px; padding: 10px 14px; border: 1px solid #4a1a1a; border-radius: 6px; background: #1e0f0f; }
+.hex-meta { color: #555; font-size: 11px; }
+.toggle-arrow { color: #555; font-size: 11px; margin-left: auto; }
+.collapsed .msg-body { display: none; }
+.hex-grid { font-size: 11px; line-height: 2; }
+.hex-row { display: flex; gap: 16px; }
+.hex-offset { color: #555; width: 36px; flex-shrink: 0; }
+.hex-bytes { color: #aaa; flex: 1; letter-spacing: 0.5px; }
+.hex-ascii { color: #666; width: 130px; flex-shrink: 0; }
+.diff-label { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 4px; }
+.diff-a { background: #3d0f0f; color: #e87b7b; }
+.diff-b { background: #0f3d28; color: #7bc97b; }
+.diff-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.diff-info { font-size: 12px; color: #888; margin-bottom: 8px; }
+.summary { font-size: 12px; color: #888; margin: 0.5rem 0 0.25rem; }
+.summary strong { color: #e0e0e0; }
+.empty-msg { font-size: 11px; color: #555; }
+</style>
+</head>
+<body>
+<header>
+  <h1>S88 MK3 Protocol Decoder</h1>
+  <span>kontrol-s88-mk3-linux reverse engineering tool</span>
+</header>
+<div class="main">
+  <div class="tabs">
+    <button class="tab active" onclick="switchTab('decode')">Decode</button>
+    <button class="tab" onclick="switchTab('diff')">Diff</button>
+  </div>
+
+  <div id="panel-decode" class="panel active">
+    <div class="input-row single">
+      <div>
+        <label>Hex dump — paste from Wireshark "Copy → As Hex Dump" or raw hex</label>
+        <textarea id="hex-input" placeholder="0000   11 00 00 00 93 02 4f 92 10 82 cd 01 02 81 cc f8&#10;0010   00 cd 01 03 c2 ..."></textarea>
+      </div>
+    </div>
+    <div class="btn-row">
+      <button class="decode-btn" onclick="decode()">Decode</button>
+      <button class="clear-btn" onclick="document.getElementById('hex-input').value='';document.getElementById('output-decode').innerHTML=''">Clear</button>
+    </div>
+    <div id="output-decode" class="output"></div>
+  </div>
+
+  <div id="panel-diff" class="panel">
+    <div class="input-row">
+      <div>
+        <label>Capture A</label>
+        <textarea id="hex-a" placeholder="Paste first hex dump..."></textarea>
+      </div>
+      <div>
+        <label>Capture B</label>
+        <textarea id="hex-b" placeholder="Paste second hex dump..."></textarea>
+      </div>
+    </div>
+    <div class="btn-row">
+      <button class="decode-btn" onclick="diff()">Compare</button>
+      <button class="clear-btn" onclick="['hex-a','hex-b','output-diff'].forEach(id=>{const el=document.getElementById(id);if(el.tagName==='TEXTAREA')el.value='';else el.innerHTML=''})">Clear</button>
+    </div>
+    <div id="output-diff" class="output"></div>
+  </div>
+</div>
+
+<script>
+const HEADERS = {
+  '93024092':['HANDSHAKE','badge-handshake'],
+  '93025092':['INIT','badge-init'],
+  '93025792':['STATE','badge-state'],
+  '93025892':['LIGHTS','badge-lights'],
+  '93024f92':['TRANSPORT','badge-transport'],
+  '93025992':['SYNC','badge-unknown'],
+  '93025492':['DISPLAY','badge-unknown'],
+  '93025b92':['PING','badge-unknown'],
+  '93024192':['FILTER','badge-unknown'],
+  '93024592':['CONFIG','badge-unknown'],
+  '93024b92':['LAYOUT','badge-unknown'],
+  '93025192':['STATUS','badge-unknown'],
+};
+
+const KEY_NAMES = {
+  114:'param_114',115:'param_115',116:'param_116',117:'param_117',
+  118:'param_118',119:'param_119',120:'tempo_bpm',121:'keyboard_id',
+  122:'param_122',123:'param_123',124:'param_124',125:'param_125',126:'param_126',
+  256:'init_a',257:'init_b',258:'transport_a',259:'transport_b',
+  0x85:'param_85',0x86:'param_86',0x87:'param_87',0x88:'param_88',
+  0x89:'scale_notes',0x8a:'param_8a',0x8b:'param_8b',0x8c:'param_8c',
+  0x8d:'param_8d',0x8e:'arp_rate_options',0x8f:'arp_range',
+  0x90:'arp_range_b',0x91:'param_91',0x92:'arp_rate',
+  0x93:'scale_mode_options',0x94:'arp_octave',0x95:'arp_octave_options',
+  0x96:'arp_tempo_range',0x97:'arp_swing_options',0x98:'arp_gate_options',
+  0x99:'arp_transpose_options',0x9a:'arp_pattern_options',
+  0x9b:'arp_velocity_range',0x9c:'arp_gate_range',0x9d:'param_9d',
+  0xa1:'scale_notes_b',0xa3:'scale_mode_b',0xa4:'scale_mode',
+  0xa5:'range_min',0xa6:'range_max',0xa7:'range_default',0xa8:'current_val',
+  0xa9:'options_list',0xaa:'default_idx',0xab:'display_items',0xac:'display_data',
+  0xad:'param_ad',0xae:'param_ae',0xaf:'param_af',0xb0:'param_b0',
+  0xb1:'param_b1',0xb2:'param_b2',0xb4:'display_list',0xb5:'param_b5',
+  0xf8:'transport_state',0xf0:'param_f0',
+};
+
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach((t,i)=>t.classList.toggle('active',['decode','diff'][i]===name));
+  document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+  document.getElementById('panel-'+name).classList.add('active');
+}
+
+function parseHex(raw) {
+  const lines = raw.split('\n');
+  const hexParts = [];
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    let rest = trimmed.replace(/^[0-9a-fA-F]{1,8}[\s\t]+/, '');
+    const tokens = rest.split(/\s+/);
+    for (const tok of tokens) {
+      if (/^[0-9a-fA-F]{2}$/.test(tok)) hexParts.push(tok);
+      else break;
+    }
+  }
+  return hexParts.join('');
+}
+
+function hexToBytes(raw) {
+  const clean = parseHex(raw);
+  if (!clean || clean.length % 2 !== 0) throw new Error(`Invalid hex (${clean.length} nibbles)`);
+  const b = new Uint8Array(clean.length/2);
+  for(let i=0;i<b.length;i++) b[i]=parseInt(clean.substr(i*2,2),16);
+  return b;
+}
+
+function readU32LE(b,o){ return (b[o]|b[o+1]<<8|b[o+2]<<16|b[o+3]<<24)>>>0; }
+function looksLikeS88(b){ return b.length>=8 && b[4]===0x93 && b[5]===0x02 && readU32LE(b,0)>=4 && readU32LE(b,0)<=b.length-4; }
+
+function mpDecode(buf, pos) {
+  if (pos >= buf.length) throw new Error('EOF');
+  const b = buf[pos++];
+  if (b===0xc0) return [null,pos];
+  if (b===0xc2) return [false,pos];
+  if (b===0xc3) return [true,pos];
+  if ((b&0x80)===0) return [b,pos];
+  if ((b&0xe0)===0xe0) return [b-256,pos];
+  if ((b&0xe0)===0xa0) { const n=b&0x1f; return [new TextDecoder().decode(buf.slice(pos,pos+n)),pos+n]; }
+  if ((b&0xf0)===0x90) { const n=b&0x0f; const a=[]; for(let i=0;i<n;i++){const[v,p]=mpDecode(buf,pos);a.push(v);pos=p;} return [a,pos]; }
+  if ((b&0xf0)===0x80) { const n=b&0x0f; const m={}; for(let i=0;i<n;i++){const[k,p1]=mpDecode(buf,pos);pos=p1;const[v,p2]=mpDecode(buf,pos);pos=p2;m[k]=v;} return [m,pos]; }
+  if (b===0xcc) return [buf[pos],pos+1];
+  if (b===0xcd) return [(buf[pos]<<8|buf[pos+1])>>>0,pos+2];
+  if (b===0xce) return [(buf[pos]<<24|buf[pos+1]<<16|buf[pos+2]<<8|buf[pos+3])>>>0,pos+4];
+  if (b===0xd0) { const v=buf[pos]; return [v>=128?v-256:v,pos+1]; }
+  if (b===0xd1) { const v=buf[pos]<<8|buf[pos+1]; return [v>=32768?v-65536:v,pos+2]; }
+  if (b===0xca) { const dv=new DataView(buf.buffer,buf.byteOffset+pos,4); return [dv.getFloat32(0,false),pos+4]; }
+  if (b===0xcb) { const dv=new DataView(buf.buffer,buf.byteOffset+pos,8); return [dv.getFloat64(0,false),pos+8]; }
+  if (b===0xd9) { const n=buf[pos++]; return [new TextDecoder().decode(buf.slice(pos,pos+n)),pos+n]; }
+  if (b===0xda) { const n=buf[pos]<<8|buf[pos+1]; pos+=2; return [new TextDecoder().decode(buf.slice(pos,pos+n)),pos+n]; }
+  if (b===0xdb) { const n=(buf[pos]<<24|buf[pos+1]<<16|buf[pos+2]<<8|buf[pos+3])>>>0; pos+=4; return [new TextDecoder().decode(buf.slice(pos,pos+n)),pos+n]; }
+  if (b===0xdc) { const n=buf[pos]<<8|buf[pos+1]; pos+=2; const a=[]; for(let i=0;i<n;i++){const[v,p]=mpDecode(buf,pos);a.push(v);pos=p;} return [a,pos]; }
+  if (b===0xdd) { const n=(buf[pos]<<24|buf[pos+1]<<16|buf[pos+2]<<8|buf[pos+3])>>>0; pos+=4; const a=[]; for(let i=0;i<n;i++){const[v,p]=mpDecode(buf,pos);a.push(v);pos=p;} return [a,pos]; }
+  if (b===0xde) { const n=buf[pos]<<8|buf[pos+1]; pos+=2; const m={}; for(let i=0;i<n;i++){const[k,p1]=mpDecode(buf,pos);pos=p1;const[v,p2]=mpDecode(buf,pos);pos=p2;m[k]=v;} return [m,pos]; }
+  if (b===0xdf) { const n=(buf[pos]<<24|buf[pos+1]<<16|buf[pos+2]<<8|buf[pos+3])>>>0; pos+=4; const m={}; for(let i=0;i<n;i++){const[k,p1]=mpDecode(buf,pos);pos=p1;const[v,p2]=mpDecode(buf,pos);pos=p2;m[k]=v;} return [m,pos]; }
+  if (b===0xc4) { const n=buf[pos++]; return [buf.slice(pos,pos+n),pos+n]; }
+  if (b===0xc5) { const n=buf[pos]<<8|buf[pos+1]; pos+=2; return [buf.slice(pos,pos+n),pos+n]; }
+  throw new Error(`Unknown msgpack byte 0x${b.toString(16)} at pos ${pos-1}`);
+}
+
+function decodeAll(payload) {
+  const res=[]; let pos=0;
+  while(pos<payload.length){
+    try{const[v,p]=mpDecode(payload,pos);if(p===pos)break;res.push(v);pos=p;}catch(e){break;}
+  }
+  return res;
+}
+
+function decodeMessages(bytes) {
+  const msgs=[]; let offset=0;
+  while(offset<bytes.length){
+    if(offset+8>bytes.length) break;
+    const length=readU32LE(bytes,offset);
+    if(length<4||offset+4+length>bytes.length) break;
+    const header=Array.from(bytes.slice(offset+4,offset+8)).map(b=>b.toString(16).padStart(2,'0')).join('');
+    const payload=bytes.slice(offset+8,offset+4+length);
+    const decoded=decodeAll(payload);
+    msgs.push({offset,length,header,decoded});
+    offset+=4+length;
+  }
+  return msgs;
+}
+
+function kn(k){ const ki=typeof k==='number'?k:parseInt(k); return KEY_NAMES[ki]!==undefined?KEY_NAMES[ki]:(isNaN(ki)?String(k):`0x${ki.toString(16)}`); }
+
+function fmtVal(val,key,dc,depth) {
+  depth = depth||0;
+  const c=dc?` ${dc}`:'';
+  if(val===null||val===undefined) return `<span class="kv-val nil${c}">null</span>`;
+  if(typeof val==='boolean') return `<span class="kv-val bool${c}">${val}</span>`;
+  if(val instanceof Uint8Array) return `<span class="kv-val nil${c}">[binary ${val.length} bytes]</span>`;
+  if(typeof val==='number'){
+    const ki=typeof key==='number'?key:parseInt(key);
+    if(ki===120) return `<span class="kv-val bpm${c}">${val.toFixed(1)} BPM</span>`;
+    return `<span class="kv-val num${c}">${Number.isInteger(val)?val:val.toFixed(3)}</span>`;
+  }
+  if(typeof val==='string') return `<span class="kv-val str${c}">"${val}"</span>`;
+  if(Array.isArray(val)){
+    if(!val.length) return `<span class="kv-val nil${c}">[]</span>`;
+    if(val.every(v=>typeof v==='string')) return `<span class="kv-val str${c}">[${val.map(v=>`"${v}"`).join(', ')}]</span>`;
+    if(val.every(v=>typeof v==='number')) return `<span class="kv-val num${c}">[${val.join(', ')}]</span>`;
+    return `<div class="nested">${val.map((v,i)=>`<div class="kv-row"><span class="kv-key">[${i}]</span>${fmtVal(v,null,null,depth+1)}</div>`).join('')}</div>`;
+  }
+  if(typeof val==='object'){
+    
+    return `<div class="nested">${mapRows(val,null,depth+1)}</div>`;
+  }
+  return `<span class="kv-val${c}">${val}</span>`;
+}
+
+function mapRows(obj,diffData,depth) {
+  depth=depth||0;
+  return Object.entries(obj).map(([k,v])=>{
+    const name=kn(k);
+    const ks=String(k);
+    let vh;
+    if(diffData){
+      if(diffData.changed&&diffData.changed.has(ks)) vh=fmtVal(v,k,diffData.side==='a'?'removed':'added',depth);
+      else if(diffData.added&&diffData.added.has(ks)) vh=fmtVal(v,k,'added',depth);
+      else if(diffData.removed&&diffData.removed.has(ks)) vh=fmtVal(v,k,'removed',depth);
+      else vh=fmtVal(v,k,null,depth);
+    } else vh=fmtVal(v,k,null,depth);
+    return `<div class="kv-row"><span class="kv-key">${name}</span>${vh}</div>`;
+  }).join('');
+}
+
+let msgCounter = 0;
+function renderMsg(msg,diffData) {
+  const[hn,hc]=HEADERS[msg.header]||['UNKNOWN','badge-unknown'];
+  const id=`m${msgCounter++}`;
+  let body='';
+  for(const val of msg.decoded){
+    if(typeof val==='object'&&val!==null&&!Array.isArray(val)&&!(val instanceof Uint8Array)) body+=mapRows(val,diffData,0);
+    else body+=`<div class="kv-row"><span class="kv-key">value</span>${fmtVal(val,null,null,0)}</div>`;
+  }
+  if(!body) body=`<span class="empty-msg">empty payload</span>`;
+  return `<div class="msg-block" id="${id}">
+    <div class="msg-header" onclick="tog('${id}')">
+      <span class="badge ${hc}">${hn}</span>
+      <span class="hex-meta">offset 0x${msg.offset.toString(16).padStart(4,'0')}</span>
+      <span class="hex-meta">${msg.length} bytes</span>
+      <span class="hex-meta" style="font-family:monospace;font-size:11px">${msg.header}</span>
+      <span class="toggle-arrow">▾</span>
+    </div>
+    <div class="msg-body">${body}</div>
+  </div>`;
+}
+
+function tog(id){const el=document.getElementById(id);el.classList.toggle('collapsed');el.querySelector('.toggle-arrow').textContent=el.classList.contains('collapsed')?'▸':'▾';}
+
+function renderRaw(bytes){
+  let h='';
+  for(let i=0;i<Math.min(bytes.length,512);i+=16){
+    const c=bytes.slice(i,i+16);
+    h+=`<div class="hex-row"><span class="hex-offset">${i.toString(16).padStart(4,'0')}</span><span class="hex-bytes">${Array.from(c).map(b=>b.toString(16).padStart(2,'0')).join(' ')}</span><span class="hex-ascii">${Array.from(c).map(b=>(b>=32&&b<127)?String.fromCharCode(b):'.').join('')}</span></div>`;
+  }
+  return `<div class="msg-block"><div class="msg-header"><span class="badge badge-raw">RAW</span><span class="hex-meta">${bytes.length} bytes — not S88 MessagePack format</span></div><div class="msg-body hex-grid">${h}${bytes.length>512?`<div style="color:#555;font-size:11px;margin-top:6px">… ${bytes.length-512} more bytes</div>`:''}</div></div>`;
+}
+
+function decode(){
+  msgCounter=0;
+  const raw=document.getElementById('hex-input').value.trim();
+  const out=document.getElementById('output-decode');
+  if(!raw){out.innerHTML='';return;}
+  try{
+    const bytes=hexToBytes(raw);
+    if(!looksLikeS88(bytes)){out.innerHTML=renderRaw(bytes);return;}
+    const msgs=decodeMessages(bytes);
+    out.innerHTML=msgs.length?msgs.map(m=>renderMsg(m,null)).join(''):renderRaw(bytes);
+  }catch(e){out.innerHTML=`<div class="error">${e.message}</div>`;}
+}
+
+function getMap(msg){const m={};for(const v of msg.decoded)if(typeof v==='object'&&v&&!Array.isArray(v)&&!(v instanceof Uint8Array))Object.assign(m,v);return m;}
+
+function diff(){
+  msgCounter=0;
+  const rA=document.getElementById('hex-a').value.trim(),rB=document.getElementById('hex-b').value.trim();
+  const out=document.getElementById('output-diff');
+  if(!rA||!rB){out.innerHTML='';return;}
+  try{
+    const bA=hexToBytes(rA),bB=hexToBytes(rB);
+    if(!looksLikeS88(bA)||!looksLikeS88(bB)){
+      let aH='',bH='',dc=0;
+      for(let i=0;i<Math.max(bA.length,bB.length);i+=16){
+        const cA=bA.slice(i,i+16),cB=bB.slice(i,i+16);
+        let rA=`<span class="hex-offset">${i.toString(16).padStart(4,'0')}</span>`,rB2=`<span class="hex-offset">${i.toString(16).padStart(4,'0')}</span>`;
+        for(let j=0;j<16;j++){
+          const a=cA[j]!==undefined?cA[j].toString(16).padStart(2,'0'):'--';
+          const b2=cB[j]!==undefined?cB[j].toString(16).padStart(2,'0'):'--';
+          if(a!==b2){rA+=` <span style="color:#e87b7b;font-weight:bold">${a}</span>`;rB2+=` <span style="color:#7bc97b;font-weight:bold">${b2}</span>`;dc++;}
+          else{rA+=' '+a;rB2+=' '+b2;}
+        }
+        aH+=`<div class="hex-row">${rA}</div>`;bH+=`<div class="hex-row">${rB2}</div>`;
+      }
+      out.innerHTML=`<p class="diff-info">${dc} byte position${dc!==1?'s':''} differ</p><div class="diff-grid"><div><p style="font-size:11px;margin-bottom:6px"><span class="diff-label diff-a">A</span> ${bA.length} bytes</p><div class="msg-block"><div class="msg-body hex-grid">${aH}</div></div></div><div><p style="font-size:11px;margin-bottom:6px"><span class="diff-label diff-b">B</span> ${bB.length} bytes</p><div class="msg-block"><div class="msg-body hex-grid">${bH}</div></div></div></div>`;
+      return;
+    }
+    const mA=decodeMessages(bA),mB=decodeMessages(bB);
+    let html='';
+    for(let i=0;i<Math.max(mA.length,mB.length);i++){
+      const a=mA[i],b=mB[i];
+      if(!a){html+=`<p class="summary">Msg ${i+1} only in B</p>`+renderMsg(b,null);continue;}
+      if(!b){html+=`<p class="summary">Msg ${i+1} only in A</p>`+renderMsg(a,null);continue;}
+      const mapA=getMap(a),mapB=getMap(b);
+      const ch=new Set(),ad=new Set(),rm=new Set();
+      for(const k of Object.keys(mapA)){if(!(k in mapB))rm.add(k);else if(JSON.stringify(mapA[k])!==JSON.stringify(mapB[k]))ch.add(k);}
+      for(const k of Object.keys(mapB))if(!(k in mapA))ad.add(k);
+      if(ch.size||ad.size||rm.size){
+        html+=`<p class="summary">Msg ${i+1} — <strong>${ch.size} changed</strong>, <strong>${ad.size} added</strong>, <strong>${rm.size} removed</strong></p>
+        <div class="diff-grid">
+          <div><p style="font-size:11px;margin-bottom:6px"><span class="diff-label diff-a">A</span></p>${renderMsg(a,{changed:ch,removed:ad,side:'a'})}</div>
+          <div><p style="font-size:11px;margin-bottom:6px"><span class="diff-label diff-b">B</span></p>${renderMsg(b,{changed:ch,added:rm,side:'b'})}</div>
+        </div>`;
+      } else {
+        html+=`<p class="summary">Msg ${i+1} — identical</p>${renderMsg(a,null)}`;
+      }
+    }
+    out.innerHTML=html||'<div class="error">Nothing to compare</div>';
+  }catch(e){out.innerHTML=`<div class="error">${e.message}</div>`;}
+}
+
+document.addEventListener('keydown', e => {
+  if ((e.ctrlKey||e.metaKey) && e.key==='Enter') {
+    const activePanel = document.querySelector('.panel.active');
+    if (activePanel.id==='panel-decode') decode();
+    else diff();
+  }
+});
+</script>
+</body>
+</html>
